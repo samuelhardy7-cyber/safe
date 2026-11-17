@@ -1,0 +1,8 @@
+{
+  "name": "Remix Higayon Church Management",
+  "description": "Private Congregation \u0026 Financial Management System — Sistem manajemen administrasi gereja multi-gereja dengan kontrol akses berbasis peran untuk data jemaat rahasia dan keuangan gereja.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

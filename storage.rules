@@ -1,0 +1,92 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Default deny all
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isVerified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    // Terhubung ke named Firestore database Enterprise proyek ini
+    function membershipDoc(churchId, uid) {
+      return firestore.get(/databases/ai-studio-remixhigayonchur-6ad234a1-b5ec-466f-b61f-00dc3d1a78cd/documents/churches/$(churchId)/memberships/$(uid));
+    }
+
+    function isActiveMember(churchId) {
+      return isVerified()
+        && firestore.exists(/databases/ai-studio-remixhigayonchur-6ad234a1-b5ec-466f-b61f-00dc3d1a78cd/documents/churches/$(churchId)/memberships/$(request.auth.uid))
+        && membershipDoc(churchId, request.auth.uid).data.status == 'active';
+    }
+
+    function isChurchOwner(churchId) {
+      return isActiveMember(churchId)
+        && membershipDoc(churchId, request.auth.uid).data.role == 'owner';
+    }
+
+    function hasFinancePerm(churchId, perm, legacyPerm) {
+      return isActiveMember(churchId) && (
+        membershipDoc(churchId, request.auth.uid).data.role == 'owner'
+        || (
+          membershipDoc(churchId, request.auth.uid).data.role in ['finance_manager', 'finance_staff']
+          && (
+            perm in membershipDoc(churchId, request.auth.uid).data.financePermissions
+            || (legacyPerm != '' && legacyPerm in membershipDoc(churchId, request.auth.uid).data.financePermissions)
+          )
+        )
+      );
+    }
+
+    // Private church congregation photos & attachments (STRICTLY Owner only; max 5MB; safe MIME types)
+    match /churches/{churchId}/congregation/{allFiles=**} {
+      allow read: if isChurchOwner(churchId);
+      allow write: if isChurchOwner(churchId)
+        && request.resource != null
+        && request.resource.size < 5 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/(jpeg|png|webp)')
+          || request.resource.contentType == 'application/pdf'
+        );
+      allow delete: if isChurchOwner(churchId);
+    }
+
+    // Private church finance receipts & attachments (Requires finance.viewReceipts to read; finance.create/editDraft to upload; max 5MB)
+    match /churches/{churchId}/finance/{allFiles=**} {
+      allow read: if hasFinancePerm(churchId, 'finance.viewReceipts', '');
+      allow write: if (
+          hasFinancePerm(churchId, 'finance.create', 'finance:create')
+          || hasFinancePerm(churchId, 'finance.editDraft', 'finance:edit')
+        )
+        && request.resource != null
+        && request.resource.size < 5 * 1024 * 1024
+        && (
+          request.resource.contentType.matches('image/(jpeg|png|webp)')
+          || request.resource.contentType == 'application/pdf'
+        );
+      allow delete: if isChurchOwner(churchId)
+        || hasFinancePerm(churchId, 'finance.editDraft', 'finance:edit');
+    }
+
+    // Private church backups (Owner only; JSON archive < 25MB; immutable)
+    match /churches/{churchId}/backups/{allFiles=**} {
+      allow read: if isChurchOwner(churchId);
+      allow write: if isChurchOwner(churchId)
+        && request.resource != null
+        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType == 'application/json';
+      allow delete: if false;
+    }
+
+    // User private profile avatar
+    match /users/{uid}/avatar/{fileName} {
+      allow read: if isVerified() && request.auth.uid == uid;
+      allow write: if isVerified()
+        && request.auth.uid == uid
+        && request.resource.size < 2 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

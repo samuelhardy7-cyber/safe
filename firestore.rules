@@ -1,0 +1,1253 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Security & Validation Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidChurchId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function membershipDoc(churchId, uid) {
+      return get(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid));
+    }
+
+    function membershipExists(churchId, uid) {
+      return exists(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid));
+    }
+
+    function isActiveMember(churchId) {
+      return isVerified()
+        && membershipExists(churchId, request.auth.uid)
+        && membershipDoc(churchId, request.auth.uid).data.status == 'active';
+    }
+
+    function isChurchOwner(churchId) {
+      return isActiveMember(churchId)
+        && membershipDoc(churchId, request.auth.uid).data.role == 'owner';
+    }
+
+    function hasFinancePerm(churchId, perm, legacyPerm) {
+      return isActiveMember(churchId) && (
+        membershipDoc(churchId, request.auth.uid).data.role == 'owner'
+        || (
+          membershipDoc(churchId, request.auth.uid).data.role in ['finance_manager', 'finance_staff']
+          && (
+            perm in membershipDoc(churchId, request.auth.uid).data.financePermissions
+            || (legacyPerm != '' && legacyPerm in membershipDoc(churchId, request.auth.uid).data.financePermissions)
+          )
+        )
+      );
+    }
+
+    function hasAnyFinanceAccess(churchId) {
+      return isActiveMember(churchId) && (
+        membershipDoc(churchId, request.auth.uid).data.role == 'owner'
+        || (
+          membershipDoc(churchId, request.auth.uid).data.role in ['finance_manager', 'finance_staff']
+          && membershipDoc(churchId, request.auth.uid).data.financePermissions.size() > 0
+        )
+      );
+    }
+
+    function isValidViewerList(data) {
+      return !('authorizedViewerUids' in data) || (
+        data.authorizedViewerUids is list
+        && data.authorizedViewerUids.size() <= 50
+        && (data.authorizedViewerUids.size() == 0 || data.authorizedViewerUids[0] is string)
+      );
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserAccount(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'locale', 'pinEnabled', 'mfaAcknowledged', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'phone', 'photoURL', 'defaultChurchId', 'locale', 'pinEnabled', 'pinHash', 'mfaAcknowledged', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 500))
+        && (!('defaultChurchId' in data) || (data.defaultChurchId is string && data.defaultChurchId.size() <= 128))
+        && data.locale in ['id-ID', 'en-US']
+        && data.pinEnabled is bool
+        && (!('pinHash' in data) || (data.pinHash is string && data.pinHash.size() <= 128))
+        && data.mfaAcknowledged is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserChurchRef(data, uid, churchId) {
+      return data.keys().hasAll(['uid', 'churchId', 'churchName', 'role', 'status', 'joinedAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'churchId', 'churchName', 'role', 'status', 'joinedAt', 'updatedAt'])
+        && data.uid == uid
+        && data.churchId == churchId
+        && isValidId(data.uid)
+        && isValidChurchId(data.churchId)
+        && data.churchName is string && data.churchName.size() >= 2 && data.churchName.size() <= 160
+        && data.role in ['owner', 'finance_manager', 'finance_staff', 'church_staff']
+        && data.status in ['active', 'suspended', 'revoked']
+        && data.joinedAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChurch(data, churchId) {
+      return data.keys().hasAll(['id', 'name', 'city', 'country', 'timezone', 'currency', 'language', 'ownerId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'name', 'denomination', 'city', 'country', 'timezone', 'currency', 'language', 'ownerId', 'status', 'createdAt', 'updatedAt'])
+        && data.id == churchId
+        && isValidChurchId(data.id)
+        && data.name is string && data.name.size() >= 3 && data.name.size() <= 160
+        && (!('denomination' in data) || (data.denomination is string && data.denomination.size() <= 120))
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 100
+        && data.country is string && data.country.size() >= 2 && data.country.size() <= 80
+        && data.timezone is string && data.timezone.size() >= 3 && data.timezone.size() <= 64
+        && data.currency in ['IDR', 'USD', 'SGD']
+        && data.language in ['id', 'en']
+        && isValidId(data.ownerId)
+        && data.status in ['active', 'archived']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChurchSettings(data, churchId) {
+      return data.keys().hasAll(['churchId', 'ownerUid', 'fiscalYearStartMonth', 'requireMfaForFinanceApproval', 'requirePinForSensitiveActions', 'sessionTimeoutMinutes', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['churchId', 'ownerUid', 'address', 'contactEmail', 'contactPhone', 'fiscalYearStartMonth', 'requireMfaForFinanceApproval', 'requirePinForSensitiveActions', 'sessionTimeoutMinutes', 'automatedBackupEnabled', 'congregationRequiredFields', 'updatedBy', 'updatedAt'])
+        && data.churchId == churchId
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && (!('address' in data) || (data.address is string && data.address.size() <= 300))
+        && (!('contactEmail' in data) || (data.contactEmail is string && data.contactEmail.size() <= 160))
+        && (!('contactPhone' in data) || (data.contactPhone is string && data.contactPhone.size() <= 32))
+        && data.fiscalYearStartMonth is int && data.fiscalYearStartMonth >= 1 && data.fiscalYearStartMonth <= 12
+        && data.requireMfaForFinanceApproval is bool
+        && data.requirePinForSensitiveActions is bool
+        && data.sessionTimeoutMinutes is int && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 120
+        && (!('automatedBackupEnabled' in data) || data.automatedBackupEnabled is bool)
+        && (!('congregationRequiredFields' in data) || (
+          data.congregationRequiredFields is list
+          && data.congregationRequiredFields.size() <= 12
+          && data.congregationRequiredFields.hasOnly(['fullName', 'nickname', 'gender', 'birthDate', 'phone', 'email', 'address', 'joinedDate', 'status', 'familyGroupId'])
+        ))
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinancePermissionList(perms) {
+      return perms is list
+        && perms.size() <= 20
+        && perms.hasOnly([
+          'finance.view',
+          'finance.create',
+          'finance.editDraft',
+          'finance.submit',
+          'finance.approve',
+          'finance.reject',
+          'finance.void',
+          'finance.export',
+          'finance.viewReports',
+          'finance.viewReceipts',
+          'finance.manageAccounts',
+          'finance.manageCategories',
+          'finance.manageSettings',
+          'finance:read',
+          'finance:create',
+          'finance:edit',
+          'finance:approve',
+          'finance:export',
+          'reports:finance'
+        ]);
+    }
+
+    function isValidChurchMembership(data, churchId, uid) {
+      return data.keys().hasAll(['uid', 'churchId', 'ownerUid', 'displayName', 'email', 'role', 'status', 'financePermissions', 'staffPermissions', 'invitedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'churchId', 'ownerUid', 'displayName', 'email', 'role', 'status', 'financePermissions', 'staffPermissions', 'invitedBy', 'createdAt', 'updatedAt'])
+        && data.uid == uid
+        && data.churchId == churchId
+        && isValidId(data.uid)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.role in ['owner', 'finance_manager', 'finance_staff', 'church_staff']
+        && data.status in ['active', 'suspended', 'revoked']
+        && isValidFinancePermissionList(data.financePermissions)
+        && (data.role != 'church_staff' || data.financePermissions.size() == 0)
+        && data.staffPermissions is list
+        && data.staffPermissions.size() <= 10
+        && data.staffPermissions.hasOnly(['dashboard:basic', 'church:view_profile'])
+        && isValidId(data.invitedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChurchInvitation(data, inviteId) {
+      return data.keys().hasAll(['id', 'churchId', 'churchName', 'ownerUid', 'invitedEmail', 'role', 'financePermissions', 'staffPermissions', 'status', 'invitedBy', 'createdAt', 'expiresAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'churchName', 'ownerUid', 'invitedEmail', 'role', 'financePermissions', 'staffPermissions', 'status', 'invitedBy', 'acceptedByUid', 'acceptedAt', 'createdAt', 'expiresAt'])
+        && data.id == inviteId
+        && isValidId(data.id) && data.id.size() >= 6
+        && isValidChurchId(data.churchId)
+        && data.churchName is string && data.churchName.size() >= 2 && data.churchName.size() <= 160
+        && isValidId(data.ownerUid)
+        && data.invitedEmail is string && data.invitedEmail.size() >= 3 && data.invitedEmail.size() <= 200
+        && data.role in ['finance_manager', 'finance_staff', 'church_staff']
+        && isValidFinancePermissionList(data.financePermissions)
+        && (data.role != 'church_staff' || data.financePermissions.size() == 0)
+        && data.staffPermissions is list
+        && data.staffPermissions.size() <= 10
+        && data.staffPermissions.hasOnly(['dashboard:basic', 'church:view_profile'])
+        && data.status in ['pending', 'accepted', 'revoked']
+        && isValidId(data.invitedBy)
+        && (!('acceptedByUid' in data) || isValidId(data.acceptedByUid))
+        && (!('acceptedAt' in data) || data.acceptedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    function isValidAuditLog(data, churchId, logId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'actorUid', 'actorEmail', 'actorRole', 'action', 'targetType', 'targetId', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'actorUid', 'actorEmail', 'actorRole', 'action', 'targetType', 'targetId', 'summary', 'createdAt'])
+        && data.id == logId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && isValidId(data.actorUid)
+        && data.actorEmail is string && data.actorEmail.size() <= 200
+        && data.actorRole in ['owner', 'finance_manager', 'finance_staff', 'church_staff']
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.targetType is string && data.targetType.size() >= 2 && data.targetType.size() <= 64
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCongregationMember(data, churchId, memberId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'memberCode', 'fullName', 'status', 'archived', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'churchId', 'ownerUid', 'memberCode', 'fullName', 'nickname', 'photoPath',
+          'gender', 'birthDate', 'phone', 'email', 'address',
+          'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+          'joinedDate', 'status', 'familyGroupId', 'familyGroupName', 'familyRole',
+          'donorRefCode', 'adminNotes', 'attachments', 'archived', 'archivedAt', 'archivedBy',
+          'version', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && data.id == memberId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.memberCode is string && data.memberCode.size() >= 3 && data.memberCode.size() <= 40 && data.memberCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 160
+        && (!('nickname' in data) || (data.nickname is string && data.nickname.size() <= 80))
+        && (!('photoPath' in data) || (data.photoPath is string && data.photoPath.size() <= 320))
+        && (!('gender' in data) || data.gender in ['', 'L', 'P'])
+        && (!('birthDate' in data) || (data.birthDate is string && data.birthDate.size() <= 16))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('address' in data) || (data.address is string && data.address.size() <= 400))
+        && (!('emergencyContactName' in data) || (data.emergencyContactName is string && data.emergencyContactName.size() <= 120))
+        && (!('emergencyContactPhone' in data) || (data.emergencyContactPhone is string && data.emergencyContactPhone.size() <= 32))
+        && (!('emergencyContactRelation' in data) || (data.emergencyContactRelation is string && data.emergencyContactRelation.size() <= 60))
+        && (!('joinedDate' in data) || (data.joinedDate is string && data.joinedDate.size() <= 16))
+        && data.status in ['active', 'inactive', 'visiting', 'moved', 'deceased']
+        && (!('familyGroupId' in data) || (data.familyGroupId is string && data.familyGroupId.size() <= 128))
+        && (!('familyGroupName' in data) || (data.familyGroupName is string && data.familyGroupName.size() <= 120))
+        && (!('familyRole' in data) || data.familyRole in ['', 'head', 'spouse', 'child', 'parent', 'other'])
+        && (!('donorRefCode' in data) || (data.donorRefCode is string && data.donorRefCode.size() <= 40))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1200))
+        && (!('attachments' in data) || (
+          data.attachments is list
+          && data.attachments.size() <= 10
+          && (data.attachments.size() == 0 || data.attachments[0] is map)
+        ))
+        && data.archived is bool
+        && (!('archivedAt' in data) || data.archivedAt == null || data.archivedAt is timestamp)
+        && (!('archivedBy' in data) || (data.archivedBy is string && data.archivedBy.size() <= 128))
+        && (!('version' in data) || (data.version is int && data.version >= 1))
+        && isValidId(data.createdBy)
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyGroup(data, churchId, groupId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'familyCode', 'name', 'archived', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'familyCode', 'name', 'headMemberId', 'notes', 'archived', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.id == groupId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.familyCode is string && data.familyCode.size() >= 3 && data.familyCode.size() <= 40 && data.familyCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && (!('headMemberId' in data) || (data.headMemberId is string && data.headMemberId.size() <= 128))
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 600))
+        && data.archived is bool
+        && isValidId(data.createdBy)
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCongregationActivity(data, churchId, activityId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'action', 'summary', 'actorUid', 'actorEmail', 'createdAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'memberId', 'memberCode', 'action', 'summary', 'actorUid', 'actorEmail', 'createdAt'])
+        && data.id == activityId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && (!('memberId' in data) || (data.memberId is string && data.memberId.size() <= 128))
+        && (!('memberCode' in data) || (data.memberCode is string && data.memberCode.size() <= 40))
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 400
+        && isValidId(data.actorUid)
+        && data.actorEmail is string && data.actorEmail.size() <= 200
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFinanceAccount(data, churchId, accountId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'name', 'accountType', 'currency', 'openingBalance', 'currentBalance', 'status', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'name', 'accountType', 'currency', 'openingBalance', 'currentBalance', 'status', 'notes', 'authorizedViewerUids', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.id == accountId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.accountType in ['cash', 'bank', 'operational', 'building', 'other']
+        && data.currency in ['IDR', 'USD', 'SGD']
+        && data.openingBalance is int && data.openingBalance >= 0
+        && data.currentBalance is int
+        && data.status in ['active', 'inactive', 'archived']
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 300))
+        && isValidViewerList(data)
+        && isValidId(data.createdBy)
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinanceCategory(data, churchId, categoryId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'type', 'code', 'name', 'color', 'status', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'type', 'code', 'name', 'description', 'color', 'status', 'authorizedViewerUids', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.id == categoryId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.type in ['income', 'expense']
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 32 && data.code.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 100
+        && (!('description' in data) || (data.description is string && data.description.size() <= 300))
+        && data.color is string && data.color.size() >= 3 && data.color.size() <= 32
+        && data.status in ['active', 'inactive']
+        && isValidViewerList(data)
+        && isValidId(data.createdBy)
+        && isValidId(data.updatedBy)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinanceTransaction(data, churchId, transactionId) {
+      return data.keys().hasAll(['id', 'txCode', 'churchId', 'ownerUid', 'type', 'date', 'description', 'amount', 'accountId', 'accountName', 'paymentMethod', 'status', 'idempotencyKey', 'createdBy', 'createdByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'txCode', 'churchId', 'ownerUid', 'type', 'date', 'categoryId', 'categoryName',
+          'description', 'amount', 'accountId', 'accountName', 'toAccountId', 'toAccountName',
+          'paymentMethod', 'anonymousRefCode', 'counterparty', 'receiptNumber', 'attachments',
+          'status', 'idempotencyKey', 'rejectionReason', 'voidReason', 'overrideReason',
+          'authorizedViewerUids', 'createdBy', 'createdByEmail',
+          'submittedBy', 'submittedAt', 'approvedBy', 'approvedByEmail', 'approvedAt',
+          'lockedAt', 'rejectedBy', 'rejectedAt', 'voidedBy', 'voidedAt',
+          'version', 'createdAt', 'updatedAt'
+        ])
+        && data.id == transactionId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && data.txCode is string && data.txCode.size() >= 4 && data.txCode.size() <= 40 && data.txCode.matches('^[a-zA-Z0-9_\\-]+$')
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.type in ['income', 'expense', 'transfer']
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && (!('categoryId' in data) || (data.categoryId is string && data.categoryId.size() <= 128))
+        && (!('categoryName' in data) || (data.categoryName is string && data.categoryName.size() <= 100))
+        && data.description is string && data.description.size() >= 2 && data.description.size() <= 400
+        && data.amount is int && data.amount > 0
+        && isValidId(data.accountId)
+        && data.accountName is string && data.accountName.size() >= 2 && data.accountName.size() <= 120
+        && (!('toAccountId' in data) || (data.toAccountId is string && data.toAccountId.size() <= 128))
+        && (!('toAccountName' in data) || (data.toAccountName is string && data.toAccountName.size() <= 120))
+        && data.paymentMethod in ['cash', 'bank_transfer', 'qris', 'debit_card', 'check', 'other']
+        && (!('anonymousRefCode' in data) || (data.anonymousRefCode is string && data.anonymousRefCode.size() <= 40))
+        && (!('counterparty' in data) || (data.counterparty is string && data.counterparty.size() <= 120))
+        && (!('receiptNumber' in data) || (data.receiptNumber is string && data.receiptNumber.size() <= 60))
+        && (!('attachments' in data) || (
+          data.attachments is list
+          && data.attachments.size() <= 10
+          && (data.attachments.size() == 0 || data.attachments[0] is map)
+        ))
+        && data.status in ['draft', 'submitted', 'approved', 'locked', 'rejected', 'voided']
+        && data.idempotencyKey is string && data.idempotencyKey.size() >= 6 && data.idempotencyKey.size() <= 80
+        && (!('rejectionReason' in data) || (data.rejectionReason is string && data.rejectionReason.size() <= 400))
+        && (!('voidReason' in data) || (data.voidReason is string && data.voidReason.size() <= 400))
+        && (!('overrideReason' in data) || (data.overrideReason is string && data.overrideReason.size() <= 400))
+        && isValidViewerList(data)
+        && isValidId(data.createdBy)
+        && data.createdByEmail is string && data.createdByEmail.size() <= 200
+        && (!('submittedBy' in data) || (data.submittedBy is string && data.submittedBy.size() <= 128))
+        && (!('submittedAt' in data) || data.submittedAt is timestamp)
+        && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128))
+        && (!('approvedByEmail' in data) || (data.approvedByEmail is string && data.approvedByEmail.size() <= 200))
+        && (!('approvedAt' in data) || data.approvedAt is timestamp)
+        && (!('lockedAt' in data) || data.lockedAt is timestamp)
+        && (!('rejectedBy' in data) || (data.rejectedBy is string && data.rejectedBy.size() <= 128))
+        && (!('rejectedAt' in data) || data.rejectedAt is timestamp)
+        && (!('voidedBy' in data) || (data.voidedBy is string && data.voidedBy.size() <= 128))
+        && (!('voidedAt' in data) || data.voidedAt is timestamp)
+        && (!('version' in data) || (data.version is int && data.version >= 1))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinanceSettings(data, churchId) {
+      return data.keys().hasAll(['churchId', 'ownerUid', 'requireReceiptAboveAmount', 'allowOwnerSelfApproveOverride', 'autoLockOnApproval', 'defaultPaymentMethod', 'updatedBy', 'updatedAt'])
+        && data.keys().hasOnly(['churchId', 'ownerUid', 'requireReceiptAboveAmount', 'allowOwnerSelfApproveOverride', 'autoLockOnApproval', 'defaultPaymentMethod', 'fiscalLockBeforeDate', 'authorizedViewerUids', 'updatedBy', 'updatedAt'])
+        && data.churchId == churchId
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.requireReceiptAboveAmount is int && data.requireReceiptAboveAmount >= 0
+        && data.allowOwnerSelfApproveOverride is bool
+        && data.autoLockOnApproval is bool
+        && data.defaultPaymentMethod in ['cash', 'bank_transfer', 'qris', 'debit_card', 'check', 'other']
+        && (!('fiscalLockBeforeDate' in data) || (data.fiscalLockBeforeDate is string && data.fiscalLockBeforeDate.size() <= 10))
+        && isValidViewerList(data)
+        && isValidId(data.updatedBy)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinanceAuditLog(data, churchId, logId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'action', 'targetType', 'targetId', 'summary', 'actorUid', 'actorEmail', 'actorRole', 'createdAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'action', 'targetType', 'targetId', 'txCode', 'summary', 'actorUid', 'actorEmail', 'actorRole', 'authorizedViewerUids', 'createdAt'])
+        && data.id == logId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 80
+        && data.targetType is string && data.targetType.size() >= 2 && data.targetType.size() <= 64
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && (!('txCode' in data) || (data.txCode is string && data.txCode.size() <= 40))
+        && data.summary is string && data.summary.size() >= 2 && data.summary.size() <= 500
+        && isValidId(data.actorUid)
+        && data.actorEmail is string && data.actorEmail.size() <= 200
+        && data.actorRole in ['owner', 'finance_manager', 'finance_staff', 'church_staff']
+        && isValidViewerList(data)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBackupRecord(data, churchId, backupId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'createdBy', 'scope', 'checksum', 'status', 'createdAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'createdBy', 'scope', 'backupType', 'checksum', 'sizeBytes', 'storagePath', 'restoredFromBackupId', 'recordSummary', 'status', 'createdAt'])
+        && data.id == backupId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && isValidId(data.createdBy)
+        && data.scope in ['full', 'settings_and_rbac', 'finance_only']
+        && (!('backupType' in data) || data.backupType in ['manual', 'scheduled', 'pre_restore'])
+        && data.checksum is string && data.checksum.size() >= 8 && data.checksum.size() <= 128
+        && (!('sizeBytes' in data) || (data.sizeBytes is int && data.sizeBytes >= 0))
+        && (!('storagePath' in data) || (data.storagePath is string && data.storagePath.size() <= 320))
+        && (!('restoredFromBackupId' in data) || (data.restoredFromBackupId is string && data.restoredFromBackupId.size() <= 128))
+        && (!('recordSummary' in data) || data.recordSummary is map)
+        && data.status in ['completed', 'verified']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidOwnershipTransfer(data, churchId, transferId) {
+      return data.keys().hasAll(['id', 'churchId', 'ownerUid', 'fromUid', 'fromEmail', 'toUid', 'toEmail', 'status', 'createdAt', 'updatedAt', 'expiresAt'])
+        && data.keys().hasOnly(['id', 'churchId', 'ownerUid', 'fromUid', 'fromEmail', 'toUid', 'toEmail', 'status', 'createdAt', 'updatedAt', 'expiresAt'])
+        && data.id == transferId
+        && data.churchId == churchId
+        && isValidId(data.id)
+        && isValidChurchId(data.churchId)
+        && isValidId(data.ownerUid)
+        && isValidId(data.fromUid)
+        && data.fromEmail is string && data.fromEmail.size() >= 3 && data.fromEmail.size() <= 200
+        && isValidId(data.toUid)
+        && data.toEmail is string && data.toEmail.size() >= 3 && data.toEmail.size() <= 200
+        && data.fromUid != data.toUid
+        && data.status in ['pending', 'accepted', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.expiresAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Private User Account (Strict PII Isolation — owner UID only, no list)
+    match /users/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
+      allow create: if isVerified()
+        && isValidId(uid)
+        && request.auth.uid == uid
+        && isValidUserAccount(incoming(), uid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(uid)
+        && request.auth.uid == uid
+        && isValidUserAccount(incoming(), uid)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'phone', 'photoURL', 'defaultChurchId', 'locale', 'pinEnabled', 'pinHash', 'mfaAcknowledged', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Per-User Church Reference Index
+    match /userChurchRefs/{uid}/churches/{churchId} {
+      allow get: if isVerified() && isValidId(uid) && isValidChurchId(churchId) && request.auth.uid == uid;
+      allow list: if isVerified() && request.auth.uid == uid;
+      allow create: if isVerified()
+        && isValidId(uid)
+        && isValidChurchId(churchId)
+        && isValidUserChurchRef(incoming(), uid, churchId)
+        && incoming().joinedAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (
+            request.auth.uid == uid
+            && incoming().role == 'owner'
+            && incoming().status == 'active'
+            && existsAfter(/databases/$(database)/documents/churches/$(churchId))
+            && getAfter(/databases/$(database)/documents/churches/$(churchId)).data.ownerId == uid
+            && getAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid)).data.role == 'owner'
+          )
+          || (
+            request.auth.uid == uid
+            && existsAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid))
+            && getAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid)).data.role == incoming().role
+            && getAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(uid)).data.status == incoming().status
+          )
+          || isChurchOwner(churchId)
+        );
+      allow update: if isVerified()
+        && isValidId(uid)
+        && isValidChurchId(churchId)
+        && isValidUserChurchRef(incoming(), uid, churchId)
+        && incoming().uid == existing().uid
+        && incoming().churchId == existing().churchId
+        && incoming().joinedAt == existing().joinedAt
+        && incoming().updatedAt == request.time
+        && isChurchOwner(churchId)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['churchName', 'role', 'status', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Isolated Church Tenant Root
+    match /churches/{churchId} {
+      allow get: if isValidChurchId(churchId) && isActiveMember(churchId);
+      allow create: if isVerified()
+        && isValidChurchId(churchId)
+        && isValidChurch(incoming(), churchId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(request.auth.uid)).data.role == 'owner'
+        && existsAfter(/databases/$(database)/documents/userChurchRefs/$(request.auth.uid)/churches/$(churchId));
+      allow update: if isVerified()
+        && isValidChurchId(churchId)
+        && isValidChurch(incoming(), churchId)
+        && isChurchOwner(churchId)
+        && existing().status != 'archived'
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'denomination', 'city', 'country', 'timezone', 'currency', 'language', 'status', 'updatedAt']);
+      allow delete: if false;
+
+      // Church Settings (general visible to active members; congregation settings strictly Owner only)
+      match /settings/{settingId} {
+        allow get: if isValidChurchId(churchId) && isValidId(settingId) && (
+          settingId == 'general' ? isActiveMember(churchId) : isChurchOwner(churchId)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(settingId)
+          && isValidChurchSettings(incoming(), churchId)
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            isChurchOwner(churchId)
+            || (
+              existsAfter(/databases/$(database)/documents/churches/$(churchId))
+              && getAfter(/databases/$(database)/documents/churches/$(churchId)).data.ownerId == request.auth.uid
+              && incoming().ownerUid == request.auth.uid
+            )
+          );
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(settingId)
+          && isValidChurchSettings(incoming(), churchId)
+          && isChurchOwner(churchId)
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['address', 'contactEmail', 'contactPhone', 'fiscalYearStartMonth', 'requireMfaForFinanceApproval', 'requirePinForSensitiveActions', 'sessionTimeoutMinutes', 'automatedBackupEnabled', 'congregationRequiredFields', 'updatedBy', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Authoritative Per-Church RBAC Memberships
+      match /memberships/{uid} {
+        allow get: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(uid)
+          && (request.auth.uid == uid || isChurchOwner(churchId));
+        allow list: if isVerified()
+          && (resource.data.uid == request.auth.uid || resource.data.ownerUid == request.auth.uid);
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(uid)
+          && isValidChurchMembership(incoming(), churchId, uid)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && (
+            (
+              request.auth.uid == uid
+              && incoming().role == 'owner'
+              && incoming().ownerUid == uid
+              && incoming().invitedBy == uid
+              && incoming().status == 'active'
+              && existsAfter(/databases/$(database)/documents/churches/$(churchId))
+              && getAfter(/databases/$(database)/documents/churches/$(churchId)).data.ownerId == uid
+            )
+            || (
+              isChurchOwner(churchId)
+              && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+              && incoming().role != 'owner'
+              && incoming().invitedBy == request.auth.uid
+            )
+            || (
+              request.auth.uid == uid
+              && incoming().role != 'owner'
+              && incoming().status == 'active'
+              && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+              && exists(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy))
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.churchId == churchId
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.invitedEmail == request.auth.token.email
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.status == 'pending'
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.role == incoming().role
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.financePermissions == incoming().financePermissions
+              && get(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.staffPermissions == incoming().staffPermissions
+              && getAfter(/databases/$(database)/documents/churchInvitations/$(incoming().invitedBy)).data.status == 'accepted'
+            )
+          );
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(uid)
+          && isValidChurchMembership(incoming(), churchId, uid)
+          && isChurchOwner(churchId)
+          && uid != request.auth.uid
+          && incoming().role != 'owner'
+          && incoming().uid == existing().uid
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().invitedBy == existing().invitedBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'financePermissions', 'staffPermissions', 'displayName', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Immutable Per-Church Audit Logs
+      match /auditLogs/{logId} {
+        allow get: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(logId)
+          && (isChurchOwner(churchId) || (isActiveMember(churchId) && existing().actorUid == request.auth.uid));
+        allow list: if isVerified()
+          && (resource.data.ownerUid == request.auth.uid || resource.data.actorUid == request.auth.uid);
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(logId)
+          && isValidAuditLog(incoming(), churchId, logId)
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && (
+            (isActiveMember(churchId) && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId)
+            || (
+              existsAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(request.auth.uid))
+              && incoming().ownerUid == getAfter(/databases/$(database)/documents/churches/$(churchId)/memberships/$(request.auth.uid)).data.ownerUid
+            )
+          );
+        allow update, delete: if false;
+      }
+
+      // Confidential Congregation Management (STRICTLY Owner Only)
+      match /congregationMembers/{memberId} {
+        allow get: if isValidChurchId(churchId) && isValidId(memberId) && isChurchOwner(churchId);
+        allow list: if isVerified() && resource.data.ownerUid == request.auth.uid;
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(memberId)
+          && isValidCongregationMember(incoming(), churchId, memberId)
+          && isChurchOwner(churchId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(memberId)
+          && isValidCongregationMember(incoming(), churchId, memberId)
+          && isChurchOwner(churchId)
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().memberCode == existing().memberCode
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'fullName', 'nickname', 'photoPath', 'gender', 'birthDate',
+            'phone', 'email', 'address',
+            'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+            'joinedDate', 'status', 'familyGroupId', 'familyGroupName', 'familyRole',
+            'donorRefCode', 'adminNotes', 'attachments', 'archived', 'archivedAt', 'archivedBy',
+            'version', 'updatedBy', 'updatedAt'
+          ]);
+        allow delete: if false;
+      }
+
+      // Confidential Family Groups (STRICTLY Owner Only)
+      match /familyGroups/{groupId} {
+        allow get: if isValidChurchId(churchId) && isValidId(groupId) && isChurchOwner(churchId);
+        allow list: if isVerified() && resource.data.ownerUid == request.auth.uid;
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(groupId)
+          && isValidFamilyGroup(incoming(), churchId, groupId)
+          && isChurchOwner(churchId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(groupId)
+          && isValidFamilyGroup(incoming(), churchId, groupId)
+          && isChurchOwner(churchId)
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().familyCode == existing().familyCode
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'headMemberId', 'notes', 'archived', 'updatedBy', 'updatedAt'
+          ]);
+        allow delete: if false;
+      }
+
+      // Confidential Congregation Activity History (Append-Only, STRICTLY Owner Only)
+      match /congregationActivities/{activityId} {
+        allow get: if isValidChurchId(churchId) && isValidId(activityId) && isChurchOwner(churchId);
+        allow list: if isVerified() && resource.data.ownerUid == request.auth.uid;
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(activityId)
+          && isValidCongregationActivity(incoming(), churchId, activityId)
+          && isChurchOwner(churchId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Financial Accounts (Owner + Granular Finance Permissions)
+      match /financeAccounts/{accountId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(accountId)
+          && (
+            hasFinancePerm(churchId, 'finance.view', 'finance:read')
+            || hasFinancePerm(churchId, 'finance.viewReports', 'reports:finance')
+            || hasFinancePerm(churchId, 'finance.manageAccounts', '')
+          );
+        allow list: if isVerified() && (
+          resource.data.ownerUid == request.auth.uid
+          || ('authorizedViewerUids' in resource.data && resource.data.authorizedViewerUids is list && request.auth.uid in resource.data.authorizedViewerUids)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(accountId)
+          && isValidFinanceAccount(incoming(), churchId, accountId)
+          && hasFinancePerm(churchId, 'finance.manageAccounts', '')
+          && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().currentBalance == incoming().openingBalance
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(accountId)
+          && isValidFinanceAccount(incoming(), churchId, accountId)
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().openingBalance == existing().openingBalance
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasFinancePerm(churchId, 'finance.manageAccounts', '')
+              && incoming().currentBalance == existing().currentBalance
+              && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'accountType', 'currency', 'status', 'notes', 'updatedBy', 'updatedAt'])
+            )
+            || (
+              (hasFinancePerm(churchId, 'finance.approve', 'finance:approve') || hasFinancePerm(churchId, 'finance.void', ''))
+              && incoming().diff(existing()).affectedKeys().hasOnly(['currentBalance', 'updatedBy', 'updatedAt'])
+            )
+            || (
+              isChurchOwner(churchId)
+              && incoming().currentBalance == existing().currentBalance
+              && incoming().diff(existing()).affectedKeys().hasOnly(['authorizedViewerUids', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Financial Categories (Owner + Granular Finance Permissions)
+      match /financeCategories/{categoryId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(categoryId)
+          && (
+            hasFinancePerm(churchId, 'finance.view', 'finance:read')
+            || hasFinancePerm(churchId, 'finance.viewReports', 'reports:finance')
+            || hasFinancePerm(churchId, 'finance.manageCategories', '')
+            || hasFinancePerm(churchId, 'finance.create', 'finance:create')
+          );
+        allow list: if isVerified() && (
+          resource.data.ownerUid == request.auth.uid
+          || ('authorizedViewerUids' in resource.data && resource.data.authorizedViewerUids is list && request.auth.uid in resource.data.authorizedViewerUids)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(categoryId)
+          && isValidFinanceCategory(incoming(), churchId, categoryId)
+          && hasFinancePerm(churchId, 'finance.manageCategories', '')
+          && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+          && incoming().createdBy == request.auth.uid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(categoryId)
+          && isValidFinanceCategory(incoming(), churchId, categoryId)
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().type == existing().type
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasFinancePerm(churchId, 'finance.manageCategories', '')
+              && incoming().diff(existing()).affectedKeys().hasOnly(['code', 'name', 'description', 'color', 'status', 'updatedBy', 'updatedAt'])
+            )
+            || (
+              isChurchOwner(churchId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['authorizedViewerUids', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Financial Transactions (Owner + Granular Permissions + Workflow State Machine)
+      match /financeTransactions/{transactionId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(transactionId)
+          && (
+            hasFinancePerm(churchId, 'finance.view', 'finance:read')
+            || hasFinancePerm(churchId, 'finance.viewReports', 'reports:finance')
+            || hasFinancePerm(churchId, 'finance.approve', 'finance:approve')
+          );
+        allow list: if isVerified() && (
+          resource.data.ownerUid == request.auth.uid
+          || ('authorizedViewerUids' in resource.data && resource.data.authorizedViewerUids is list && request.auth.uid in resource.data.authorizedViewerUids)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(transactionId)
+          && isValidFinanceTransaction(incoming(), churchId, transactionId)
+          && (
+            (
+              hasFinancePerm(churchId, 'finance.create', 'finance:create')
+              && (
+                incoming().status == 'draft'
+                || (incoming().status == 'submitted' && hasFinancePerm(churchId, 'finance.submit', ''))
+              )
+            )
+            || (
+              incoming().type == 'transfer'
+              && hasFinancePerm(churchId, 'finance.manageAccounts', '')
+              && incoming().status in ['draft', 'submitted']
+            )
+            || (
+              incoming().type == 'transfer'
+              && hasFinancePerm(churchId, 'finance.manageAccounts', '')
+              && hasFinancePerm(churchId, 'finance.approve', 'finance:approve')
+              && incoming().status in ['approved', 'locked']
+            )
+          )
+          && incoming().createdBy == request.auth.uid
+          && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+          && exists(/databases/$(database)/documents/churches/$(churchId)/financeAccounts/$(incoming().accountId))
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(transactionId)
+          && isValidFinanceTransaction(incoming(), churchId, transactionId)
+          && existing().status != 'voided'
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().idempotencyKey == existing().idempotencyKey
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdByEmail == existing().createdByEmail
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            // Action 1: Edit Draft (from draft or rejected -> draft)
+            (
+              existing().status in ['draft', 'rejected']
+              && incoming().status == 'draft'
+              && hasFinancePerm(churchId, 'finance.editDraft', 'finance:edit')
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'txCode', 'type', 'date', 'categoryId', 'categoryName', 'description', 'amount',
+                'accountId', 'accountName', 'toAccountId', 'toAccountName', 'paymentMethod',
+                'anonymousRefCode', 'counterparty', 'receiptNumber', 'attachments',
+                'status', 'rejectionReason', 'version', 'updatedAt'
+              ])
+            )
+            // Action 2: Submit for Approval (from draft or rejected -> submitted)
+            || (
+              existing().status in ['draft', 'rejected']
+              && incoming().status == 'submitted'
+              && hasFinancePerm(churchId, 'finance.submit', '')
+              && incoming().submittedBy == request.auth.uid
+              && incoming().submittedAt == request.time
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'submittedBy', 'submittedAt', 'rejectionReason', 'version', 'updatedAt'
+              ])
+            )
+            // Action 3: Approve / Auto-Lock (from submitted -> approved | locked)
+            || (
+              existing().status == 'submitted'
+              && incoming().status in ['approved', 'locked']
+              && hasFinancePerm(churchId, 'finance.approve', 'finance:approve')
+              && incoming().approvedBy == request.auth.uid
+              && incoming().approvedAt == request.time
+              && (
+                existing().createdBy != request.auth.uid
+                || (
+                  isChurchOwner(churchId)
+                  && 'overrideReason' in incoming()
+                  && incoming().overrideReason is string
+                  && incoming().overrideReason.size() >= 5
+                )
+              )
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'approvedBy', 'approvedByEmail', 'approvedAt', 'lockedAt', 'overrideReason', 'version', 'updatedAt'
+              ])
+            )
+            // Action 4: Lock an Approved transaction
+            || (
+              existing().status == 'approved'
+              && incoming().status == 'locked'
+              && hasFinancePerm(churchId, 'finance.approve', 'finance:approve')
+              && incoming().lockedAt == request.time
+              && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'lockedAt', 'version', 'updatedAt'])
+            )
+            // Action 5: Reject (from submitted -> rejected)
+            || (
+              existing().status == 'submitted'
+              && incoming().status == 'rejected'
+              && hasFinancePerm(churchId, 'finance.reject', '')
+              && incoming().rejectedBy == request.auth.uid
+              && incoming().rejectedAt == request.time
+              && 'rejectionReason' in incoming()
+              && incoming().rejectionReason is string
+              && incoming().rejectionReason.size() >= 3
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'rejectedBy', 'rejectedAt', 'rejectionReason', 'version', 'updatedAt'
+              ])
+            )
+            // Action 6: Void (from approved or locked -> voided)
+            || (
+              existing().status in ['approved', 'locked']
+              && incoming().status == 'voided'
+              && hasFinancePerm(churchId, 'finance.void', '')
+              && incoming().voidedBy == request.auth.uid
+              && incoming().voidedAt == request.time
+              && 'voidReason' in incoming()
+              && incoming().voidReason is string
+              && incoming().voidReason.size() >= 3
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'status', 'voidedBy', 'voidedAt', 'voidReason', 'version', 'updatedAt'
+              ])
+            )
+            // Action 7: Attach receipt to draft/submitted/rejected
+            || (
+              existing().status in ['draft', 'submitted', 'rejected']
+              && (
+                hasFinancePerm(churchId, 'finance.create', 'finance:create')
+                || hasFinancePerm(churchId, 'finance.editDraft', 'finance:edit')
+              )
+              && incoming().diff(existing()).affectedKeys().hasOnly(['attachments', 'receiptNumber', 'updatedAt'])
+            )
+            // Action 8: Owner syncing viewer list after permission update
+            || (
+              isChurchOwner(churchId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['authorizedViewerUids', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Financial Control Settings
+      match /financeSettings/{docId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(docId)
+          && hasAnyFinanceAccess(churchId);
+        allow list: if isVerified() && (
+          resource.data.ownerUid == request.auth.uid
+          || ('authorizedViewerUids' in resource.data && resource.data.authorizedViewerUids is list && request.auth.uid in resource.data.authorizedViewerUids)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(docId)
+          && isValidFinanceSettings(incoming(), churchId)
+          && (isChurchOwner(churchId) || hasFinancePerm(churchId, 'finance.manageSettings', ''))
+          && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time;
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(docId)
+          && isValidFinanceSettings(incoming(), churchId)
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().updatedBy == request.auth.uid
+          && incoming().updatedAt == request.time
+          && (
+            (
+              hasFinancePerm(churchId, 'finance.manageSettings', '')
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'requireReceiptAboveAmount', 'allowOwnerSelfApproveOverride',
+                'autoLockOnApproval', 'defaultPaymentMethod', 'fiscalLockBeforeDate',
+                'updatedBy', 'updatedAt'
+              ])
+            )
+            || (
+              isChurchOwner(churchId)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['authorizedViewerUids', 'updatedBy', 'updatedAt'])
+            )
+          );
+        allow delete: if false;
+      }
+
+      // Financial Audit Log (Append-Only)
+      match /financeAuditLogs/{logId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(logId)
+          && (
+            hasFinancePerm(churchId, 'finance.view', 'finance:read')
+            || hasFinancePerm(churchId, 'finance.viewReports', 'reports:finance')
+            || hasFinancePerm(churchId, 'finance.approve', 'finance:approve')
+          );
+        allow list: if isVerified() && (
+          resource.data.ownerUid == request.auth.uid
+          || ('authorizedViewerUids' in resource.data && resource.data.authorizedViewerUids is list && request.auth.uid in resource.data.authorizedViewerUids)
+        );
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(logId)
+          && isValidFinanceAuditLog(incoming(), churchId, logId)
+          && hasAnyFinanceAccess(churchId)
+          && incoming().ownerUid == get(/databases/$(database)/documents/churches/$(churchId)).data.ownerId
+          && incoming().actorUid == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Church Backups (Owner Only)
+      match /backups/{backupId} {
+        allow get: if isValidChurchId(churchId) && isValidId(backupId) && isChurchOwner(churchId);
+        allow list: if isVerified() && resource.data.ownerUid == request.auth.uid;
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(backupId)
+          && isValidBackupRecord(incoming(), churchId, backupId)
+          && isChurchOwner(churchId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Controlled Ownership Transfers (Initiated by Owner, accepted by recipient, finalized by Cloud Function)
+      match /ownershipTransfers/{transferId} {
+        allow get: if isValidChurchId(churchId)
+          && isValidId(transferId)
+          && (
+            isChurchOwner(churchId)
+            || (isActiveMember(churchId) && existing().toUid == request.auth.uid)
+          );
+        allow list: if isVerified()
+          && (resource.data.ownerUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+        allow create: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(transferId)
+          && isValidOwnershipTransfer(incoming(), churchId, transferId)
+          && isChurchOwner(churchId)
+          && incoming().ownerUid == request.auth.uid
+          && incoming().fromUid == request.auth.uid
+          && incoming().status == 'pending'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && incoming().expiresAt > request.time
+          && exists(/databases/$(database)/documents/churches/$(churchId)/memberships/$(incoming().toUid))
+          && get(/databases/$(database)/documents/churches/$(churchId)/memberships/$(incoming().toUid)).data.status == 'active';
+        allow update: if isVerified()
+          && isValidChurchId(churchId)
+          && isValidId(transferId)
+          && isValidOwnershipTransfer(incoming(), churchId, transferId)
+          && incoming().id == existing().id
+          && incoming().churchId == existing().churchId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().fromUid == existing().fromUid
+          && incoming().fromEmail == existing().fromEmail
+          && incoming().toUid == existing().toUid
+          && incoming().toEmail == existing().toEmail
+          && incoming().createdAt == existing().createdAt
+          && incoming().expiresAt == existing().expiresAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && (
+            (
+              isChurchOwner(churchId)
+              && existing().status in ['pending', 'accepted']
+              && incoming().status == 'cancelled'
+            )
+            || (
+              isActiveMember(churchId)
+              && existing().toUid == request.auth.uid
+              && existing().status == 'pending'
+              && existing().expiresAt > request.time
+              && incoming().status == 'accepted'
+            )
+          );
+        allow delete: if false;
+      }
+    }
+
+    // Controlled Church Invitations
+    match /churchInvitations/{inviteId} {
+      allow get: if isVerified()
+        && isValidId(inviteId)
+        && (existing().ownerUid == request.auth.uid || existing().invitedEmail == request.auth.token.email);
+      allow list: if isVerified()
+        && (resource.data.ownerUid == request.auth.uid || resource.data.invitedEmail == request.auth.token.email);
+      allow create: if isVerified()
+        && isValidId(inviteId)
+        && isValidChurchInvitation(incoming(), inviteId)
+        && isChurchOwner(incoming().churchId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().invitedBy == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().expiresAt > request.time;
+      allow update: if isVerified()
+        && isValidId(inviteId)
+        && isValidChurchInvitation(incoming(), inviteId)
+        && existing().status == 'pending'
+        && incoming().id == existing().id
+        && incoming().churchId == existing().churchId
+        && incoming().churchName == existing().churchName
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().invitedEmail == existing().invitedEmail
+        && incoming().role == existing().role
+        && incoming().financePermissions == existing().financePermissions
+        && incoming().staffPermissions == existing().staffPermissions
+        && incoming().invitedBy == existing().invitedBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().expiresAt == existing().expiresAt
+        && (
+          (
+            isChurchOwner(existing().churchId)
+            && incoming().status == 'revoked'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+          )
+          || (
+            existing().invitedEmail == request.auth.token.email
+            && existing().expiresAt > request.time
+            && incoming().status == 'accepted'
+            && incoming().acceptedByUid == request.auth.uid
+            && incoming().acceptedAt == request.time
+            && existsAfter(/databases/$(database)/documents/churches/$(existing().churchId)/memberships/$(request.auth.uid))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'acceptedAt'])
+          )
+        );
+      allow delete: if false;
+    }
+
+    // Platform Administrator Registry
+    match /platformAdmins/{uid} {
+      allow get: if isVerified() && isValidId(uid) && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+  }
+}

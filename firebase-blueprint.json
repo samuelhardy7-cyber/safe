@@ -1,0 +1,476 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private user profile and personal security preferences isolated per authenticated UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "defaultChurchId": { "type": "string", "maxLength": 128 },
+        "locale": { "type": "string", "enum": ["id-ID", "en-US"] },
+        "pinEnabled": { "type": "boolean" },
+        "pinHash": { "type": "string", "maxLength": 128 },
+        "mfaAcknowledged": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "locale", "pinEnabled", "mfaAcknowledged", "createdAt", "updatedAt"]
+    },
+    "UserChurchRef": {
+      "title": "UserChurchRef",
+      "description": "User-scoped index of churches the user belongs to.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "role": { "type": "string", "enum": ["owner", "finance_manager", "finance_staff", "church_staff"] },
+        "status": { "type": "string", "enum": ["active", "suspended", "revoked"] },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "churchId", "churchName", "role", "status", "joinedAt", "updatedAt"]
+    },
+    "Church": {
+      "title": "Church",
+      "description": "Isolated church tenant root document.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "denomination": { "type": "string", "maxLength": 120 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "country": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "timezone": { "type": "string", "minLength": 3, "maxLength": 64 },
+        "currency": { "type": "string", "enum": ["IDR", "USD", "SGD"] },
+        "language": { "type": "string", "enum": ["id", "en"] },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "status": { "type": "string", "enum": ["active", "archived"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "city", "country", "timezone", "currency", "language", "ownerId", "status", "createdAt", "updatedAt"]
+    },
+    "ChurchSettings": {
+      "title": "ChurchSettings",
+      "description": "Church administrative and security policy settings.",
+      "type": "object",
+      "properties": {
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "address": { "type": "string", "maxLength": 300 },
+        "contactEmail": { "type": "string", "maxLength": 160 },
+        "contactPhone": { "type": "string", "maxLength": 32 },
+        "fiscalYearStartMonth": { "type": "integer" },
+        "requireMfaForFinanceApproval": { "type": "boolean" },
+        "requirePinForSensitiveActions": { "type": "boolean" },
+        "sessionTimeoutMinutes": { "type": "integer" },
+        "automatedBackupEnabled": { "type": "boolean" },
+        "congregationRequiredFields": { "type": "array" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["churchId", "ownerUid", "fiscalYearStartMonth", "requireMfaForFinanceApproval", "requirePinForSensitiveActions", "sessionTimeoutMinutes", "updatedBy", "updatedAt"]
+    },
+    "ChurchMembership": {
+      "title": "ChurchMembership",
+      "description": "Authoritative per-church RBAC membership and explicit granular financial permission grants.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "minLength": 3, "maxLength": 200 },
+        "role": { "type": "string", "enum": ["owner", "finance_manager", "finance_staff", "church_staff"] },
+        "status": { "type": "string", "enum": ["active", "suspended", "revoked"] },
+        "financePermissions": { "type": "array" },
+        "staffPermissions": { "type": "array" },
+        "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "churchId", "ownerUid", "displayName", "email", "role", "status", "financePermissions", "staffPermissions", "invitedBy", "createdAt", "updatedAt"]
+    },
+    "ChurchInvitation": {
+      "title": "ChurchInvitation",
+      "description": "Controlled invitation record issued by a Church Owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 6, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "invitedEmail": { "type": "string", "format": "email", "minLength": 3, "maxLength": 200 },
+        "role": { "type": "string", "enum": ["finance_manager", "finance_staff", "church_staff"] },
+        "financePermissions": { "type": "array" },
+        "staffPermissions": { "type": "array" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "acceptedByUid": { "type": "string", "maxLength": 128 },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "churchName", "ownerUid", "invitedEmail", "role", "financePermissions", "staffPermissions", "status", "invitedBy", "createdAt", "expiresAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Append-only security and administration audit log isolated per church.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "actorRole": { "type": "string", "enum": ["owner", "finance_manager", "finance_staff", "church_staff"] },
+        "action": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "targetType": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "summary": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "actorUid", "actorEmail", "actorRole", "action", "targetType", "targetId", "summary", "createdAt"]
+    },
+    "CongregationMember": {
+      "title": "CongregationMember",
+      "description": "Confidential congregation member profile strictly accessible ONLY by the active Church Owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberCode": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "nickname": { "type": "string", "maxLength": 80 },
+        "photoPath": { "type": "string", "maxLength": 320 },
+        "gender": { "type": "string", "enum": ["", "L", "P"] },
+        "birthDate": { "type": "string", "maxLength": 16 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "email": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 400 },
+        "emergencyContactName": { "type": "string", "maxLength": 120 },
+        "emergencyContactPhone": { "type": "string", "maxLength": 32 },
+        "emergencyContactRelation": { "type": "string", "maxLength": 60 },
+        "joinedDate": { "type": "string", "maxLength": 16 },
+        "status": { "type": "string", "enum": ["active", "inactive", "visiting", "moved", "deceased"] },
+        "familyGroupId": { "type": "string", "maxLength": 128 },
+        "familyGroupName": { "type": "string", "maxLength": 120 },
+        "familyRole": { "type": "string", "enum": ["", "head", "spouse", "child", "parent", "other"] },
+        "donorRefCode": { "type": "string", "maxLength": 40 },
+        "adminNotes": { "type": "string", "maxLength": 1200 },
+        "attachments": { "type": "array" },
+        "archived": { "type": "boolean" },
+        "archivedAt": { "type": "string", "format": "date-time" },
+        "archivedBy": { "type": "string", "maxLength": 128 },
+        "version": { "type": "integer" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "memberCode", "fullName", "status", "archived", "createdBy", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "FamilyGroup": {
+      "title": "FamilyGroup",
+      "description": "Confidential congregation family grouping strictly accessible ONLY by the active Church Owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "familyCode": { "type": "string", "minLength": 3, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "headMemberId": { "type": "string", "maxLength": 128 },
+        "notes": { "type": "string", "maxLength": 600 },
+        "archived": { "type": "boolean" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "familyCode", "name", "archived", "createdBy", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "CongregationActivity": {
+      "title": "CongregationActivity",
+      "description": "Append-only confidential congregation activity log strictly accessible ONLY by the active Church Owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "memberId": { "type": "string", "maxLength": 128 },
+        "memberCode": { "type": "string", "maxLength": 40 },
+        "action": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "summary": { "type": "string", "minLength": 2, "maxLength": 400 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "action", "summary", "actorUid", "actorEmail", "createdAt"]
+    },
+    "FinanceAccount": {
+      "title": "FinanceAccount",
+      "description": "Church financial ledger account with integer smallest-unit balances computed transactionally.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "accountType": { "type": "string", "enum": ["cash", "bank", "operational", "building", "other"] },
+        "currency": { "type": "string", "enum": ["IDR", "USD", "SGD"] },
+        "openingBalance": { "type": "integer" },
+        "currentBalance": { "type": "integer" },
+        "status": { "type": "string", "enum": ["active", "inactive", "archived"] },
+        "notes": { "type": "string", "maxLength": 300 },
+        "authorizedViewerUids": { "type": "array" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "name", "accountType", "currency", "openingBalance", "currentBalance", "status", "createdBy", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "FinanceCategory": {
+      "title": "FinanceCategory",
+      "description": "Owner-customizable financial income and expense categories isolated per church.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["income", "expense"] },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 300 },
+        "color": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "authorizedViewerUids": { "type": "array" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "type", "code", "name", "color", "status", "createdBy", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "FinanceTransaction": {
+      "title": "FinanceTransaction",
+      "description": "Church financial transaction with strict approval workflow, integer money, and zero congregation PII.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "txCode": { "type": "string", "minLength": 4, "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "enum": ["income", "expense", "transfer"] },
+        "date": { "type": "string", "minLength": 10, "maxLength": 10 },
+        "categoryId": { "type": "string", "maxLength": 128 },
+        "categoryName": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "minLength": 2, "maxLength": 400 },
+        "amount": { "type": "integer" },
+        "accountId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "accountName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "toAccountId": { "type": "string", "maxLength": 128 },
+        "toAccountName": { "type": "string", "maxLength": 120 },
+        "paymentMethod": { "type": "string", "enum": ["cash", "bank_transfer", "qris", "debit_card", "check", "other"] },
+        "anonymousRefCode": { "type": "string", "maxLength": 40 },
+        "counterparty": { "type": "string", "maxLength": 120 },
+        "receiptNumber": { "type": "string", "maxLength": 60 },
+        "attachments": { "type": "array" },
+        "status": { "type": "string", "enum": ["draft", "submitted", "approved", "locked", "rejected", "voided"] },
+        "idempotencyKey": { "type": "string", "minLength": 6, "maxLength": 80 },
+        "rejectionReason": { "type": "string", "maxLength": 400 },
+        "voidReason": { "type": "string", "maxLength": 400 },
+        "overrideReason": { "type": "string", "maxLength": 400 },
+        "authorizedViewerUids": { "type": "array" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 200 },
+        "submittedBy": { "type": "string", "maxLength": 128 },
+        "submittedAt": { "type": "string", "format": "date-time" },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedByEmail": { "type": "string", "maxLength": 200 },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "lockedAt": { "type": "string", "format": "date-time" },
+        "rejectedBy": { "type": "string", "maxLength": 128 },
+        "rejectedAt": { "type": "string", "format": "date-time" },
+        "voidedBy": { "type": "string", "maxLength": 128 },
+        "voidedAt": { "type": "string", "format": "date-time" },
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "txCode", "churchId", "ownerUid", "type", "date", "description", "amount", "accountId", "accountName", "paymentMethod", "status", "idempotencyKey", "createdBy", "createdByEmail", "createdAt", "updatedAt"]
+    },
+    "FinanceSettings": {
+      "title": "FinanceSettings",
+      "description": "Church financial control settings managed by Owner or users with finance.manageSettings.",
+      "type": "object",
+      "properties": {
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "requireReceiptAboveAmount": { "type": "integer" },
+        "allowOwnerSelfApproveOverride": { "type": "boolean" },
+        "autoLockOnApproval": { "type": "boolean" },
+        "defaultPaymentMethod": { "type": "string", "enum": ["cash", "bank_transfer", "qris", "debit_card", "check", "other"] },
+        "fiscalLockBeforeDate": { "type": "string", "maxLength": 10 },
+        "authorizedViewerUids": { "type": "array" },
+        "updatedBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["churchId", "ownerUid", "requireReceiptAboveAmount", "allowOwnerSelfApproveOverride", "autoLockOnApproval", "defaultPaymentMethod", "updatedBy", "updatedAt"]
+    },
+    "FinanceAuditLog": {
+      "title": "FinanceAuditLog",
+      "description": "Append-only financial audit trail isolated per church without congregation PII.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "targetType": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "txCode": { "type": "string", "maxLength": 40 },
+        "summary": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "actorRole": { "type": "string", "enum": ["owner", "finance_manager", "finance_staff", "church_staff"] },
+        "authorizedViewerUids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "action", "targetType", "targetId", "summary", "actorUid", "actorEmail", "actorRole", "createdAt"]
+    },
+    "BackupRecord": {
+      "title": "BackupRecord",
+      "description": "Church-isolated backup metadata log created strictly by the Church Owner.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdBy": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "scope": { "type": "string", "enum": ["full", "settings_and_rbac", "finance_only"] },
+        "backupType": { "type": "string", "enum": ["manual", "scheduled", "pre_restore"] },
+        "checksum": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "sizeBytes": { "type": "integer" },
+        "storagePath": { "type": "string", "maxLength": 320 },
+        "restoredFromBackupId": { "type": "string", "maxLength": 128 },
+        "recordSummary": { "type": "object" },
+        "status": { "type": "string", "enum": ["completed", "verified"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "createdBy", "scope", "checksum", "status", "createdAt"]
+    },
+    "OwnershipTransfer": {
+      "title": "OwnershipTransfer",
+      "description": "Controlled multi-step Church Owner transfer request finalized strictly by Cloud Functions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "churchId": { "type": "string", "minLength": 3, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fromUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "fromEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "toUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "toEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["pending", "accepted", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "churchId", "ownerUid", "fromUid", "fromEmail", "toUid", "toEmail", "status", "createdAt", "updatedAt", "expiresAt"]
+    },
+    "PlatformAdmin": {
+      "title": "PlatformAdmin",
+      "description": "Platform technical administrator registry without access to tenant congregation or financial data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account profile and security preferences."
+    },
+    "/userChurchRefs/{uid}/churches/{churchId}": {
+      "schema": { "$ref": "#/entities/UserChurchRef" },
+      "description": "Per-user list of authorized church workspaces."
+    },
+    "/churches/{churchId}": {
+      "schema": { "$ref": "#/entities/Church" },
+      "description": "Root document for each isolated church tenant."
+    },
+    "/churches/{churchId}/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/ChurchSettings" },
+      "description": "Church administrative and security configuration."
+    },
+    "/churches/{churchId}/memberships/{uid}": {
+      "schema": { "$ref": "#/entities/ChurchMembership" },
+      "description": "Authoritative per-church RBAC membership and explicit permission grants."
+    },
+    "/churches/{churchId}/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable per-church security and administrative audit trail."
+    },
+    "/churches/{churchId}/congregationMembers/{memberId}": {
+      "schema": { "$ref": "#/entities/CongregationMember" },
+      "description": "Confidential congregation profiles strictly accessible ONLY by the Church Owner."
+    },
+    "/churches/{churchId}/familyGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/FamilyGroup" },
+      "description": "Confidential congregation family groupings strictly accessible ONLY by the Church Owner."
+    },
+    "/churches/{churchId}/congregationActivities/{activityId}": {
+      "schema": { "$ref": "#/entities/CongregationActivity" },
+      "description": "Immutable activity history for congregation changes strictly accessible ONLY by the Church Owner."
+    },
+    "/churches/{churchId}/financeAccounts/{accountId}": {
+      "schema": { "$ref": "#/entities/FinanceAccount" },
+      "description": "Church financial ledger accounts reserved for Owner and authorized Finance roles."
+    },
+    "/churches/{churchId}/financeCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/FinanceCategory" },
+      "description": "Customizable income and expense categories for the church."
+    },
+    "/churches/{churchId}/financeTransactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/FinanceTransaction" },
+      "description": "Church financial transactions with approval workflow and zero congregation PII."
+    },
+    "/churches/{churchId}/financeSettings/{docId}": {
+      "schema": { "$ref": "#/entities/FinanceSettings" },
+      "description": "Financial control policies for the church."
+    },
+    "/churches/{churchId}/financeAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/FinanceAuditLog" },
+      "description": "Immutable financial audit log per church."
+    },
+    "/churches/{churchId}/backups/{backupId}": {
+      "schema": { "$ref": "#/entities/BackupRecord" },
+      "description": "Per-church backup metadata accessible strictly by the Church Owner."
+    },
+    "/churches/{churchId}/ownershipTransfers/{transferId}": {
+      "schema": { "$ref": "#/entities/OwnershipTransfer" },
+      "description": "Per-church controlled ownership transfer requests."
+    },
+    "/churchInvitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/ChurchInvitation" },
+      "description": "Owner-issued invitations for onboarding users into a church workspace."
+    },
+    "/platformAdmins/{uid}": {
+      "schema": { "$ref": "#/entities/PlatformAdmin" },
+      "description": "Platform administrator registry without access to church congregation or financial contents."
+    }
+  }
+}
