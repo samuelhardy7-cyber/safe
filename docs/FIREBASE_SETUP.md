@@ -25,6 +25,29 @@ Pastikan pengaturan di **Firebase Console** (`Build > Authentication`) aktif seb
 4. Aktifkan verifikasi email pada alur pendaftaran (sudah diwajibkan juga di `firestore.rules` melalui `request.auth.token.email_verified == true` dan `EmailVerificationGate`).
 5. **Multi-Factor Authentication (MFA)**: Untuk Church Owner dan Finance Approver, aktifkan MFA (SMS atau Authenticator App / TOTP) di menu **Authentication > Settings > Multi-factor authentication** demi perlindungan akun tingkat lanjut.
 
+### 2A. Manajemen Domain Produksi (Vercel, Custom Domain & `auth/unauthorized-domain`)
+
+Error `Firebase: Error (auth/unauthorized-domain)` terjadi ketika hostname tempat aplikasi berjalan (misalnya domain Vercel produksi atau custom domain gereja) belum masuk ke daftar **Authorized domains** pada Firebase Console.
+
+> **ATURAN PENTING**: Jangan mengganti `authDomain` (`praxis-implement-h01dl.firebaseapp.com`) menjadi domain Vercel (`*.vercel.app`) kecuali Anda menyiapkan reverse proxy Firebase Auth resmi pada server Anda. Firebase Authentication memisahkan **domain hosting aplikasi** (Vercel) dan **`authDomain`** (`praxis-implement-h01dl.firebaseapp.com`).
+
+Daftar hostname per environment yang perlu dikelola secara eksplisit (tanpa wildcard yang tidak perlu):
+
+| Environment | Contoh Hostname | Status Default Firebase | Tindakan Wajib |
+| :--- | :--- | :--- | :--- |
+| **Development** | `localhost`, `127.0.0.1` | Otomatis diizinkan | Siap digunakan untuk pengembangan lokal (`http://localhost:3000`). |
+| **Staging / Vercel Preview** | `higayon-git-staging-xxx.vercel.app`, `ais-dev-*.run.app` | **Tidak** otomatis diizinkan | Daftarkan hostname preview yang dipakai secara eksplisit di Firebase Console hanya selama pengujian; Vercel Preview URL acak tidak otomatis diotorisasi. |
+| **Production Vercel** | `<nama-proyek>.vercel.app` | **Tidak** otomatis diizinkan | **Wajib** ditambahkan persis (tanpa `https://`) ke **Authentication > Settings > Authorized domains**. |
+| **Custom Domain** | `app.namagereja.org` | **Tidak** otomatis diizinkan | Tambahkan persis ke **Authorized domains** setelah DNS Vercel aktif. |
+
+Langkah perbaikan di **Firebase Console** & **Google Cloud Console**:
+
+1. Buka [Firebase Console](https://console.firebase.google.com/project/praxis-implement-h01dl/authentication/settings) → **Authentication → Settings → Authorized domains → Add domain**.
+2. Masukkan hostname Vercel produksi Anda (contoh: `higayon-church.vercel.app`) dan domain kustom jika ada, lalu klik **Add**. Anda dapat menyalin hostname aktif langsung dari tombol **Diagnostik Auth** di halaman login.
+3. Pada **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client IDs**, pastikan:
+   - **Authorized JavaScript origins** mencantumkan `https://praxis-implement-h01dl.firebaseapp.com` serta origin domain aplikasi bila menggunakan GIS OAuth Drive backup.
+   - **Authorized redirect URIs** mencantumkan `https://praxis-implement-h01dl.firebaseapp.com/__/auth/handler`.
+
 ## 3. Cloud Firestore & Validasi Security Rules
 
 Aplikasi ini menggunakan database Firestore non-default (`ai-studio-remixhigayonchur-6ad234a1-b5ec-466f-b61f-00dc3d1a78cd`) dengan isolasi tenant ketat di bawah `churches/{churchId}`:

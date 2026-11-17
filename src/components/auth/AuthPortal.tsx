@@ -1,11 +1,13 @@
 import React, {useEffect, useState} from 'react';
 import {
+  Activity,
   AlertCircle,
   CheckCircle2,
   Eye,
   EyeOff,
   HelpCircle,
   KeyRound,
+  Loader2,
   Lock,
   Mail,
   Moon,
@@ -17,15 +19,26 @@ import {
 } from 'lucide-react';
 import {useAuth} from '../../contexts/AuthContext';
 import {useTheme} from '../../contexts/ThemeContext';
-import {FIREBASE_META, isFirebaseConfigured, verifyFirestoreConnection, type FirebaseStatusInfo} from '../../firebase';
+import {validateEmailAddressFormat} from '../../domain/authDiagnostics';
+import {validatePasswordStrength, validateProfileInput} from '../../domain/validation';
+import {
+  FIREBASE_META,
+  isFirebaseConfigured,
+  verifyFirestoreConnection,
+  type FirebaseStatusInfo,
+} from '../../firebase';
 import {InstallHigayonModal, PWAInstallButton} from '../pwa/PWAControls';
+import {AuthDiagnosticModal} from './AuthDiagnosticModal';
 
 type AuthTab = 'login' | 'register' | 'forgot';
 
 export const AuthPortal: React.FC = () => {
   const {
     actionLink,
+    lastAuthDiagnostic,
+    redirectAuthError,
     clearActionLink,
+    clearRedirectAuthError,
     loginWithEmail,
     registerWithEmail,
     loginWithGoogle,
@@ -48,6 +61,7 @@ export const AuthPortal: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [resetEmailTarget, setResetEmailTarget] = useState<string | null>(null);
   const [showSetupGuide, setShowSetupGuide] = useState(false);
+  const [showDiagnosticModal, setShowDiagnosticModal] = useState(false);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [fbStatus, setFbStatus] = useState<FirebaseStatusInfo>({
     configured: isFirebaseConfigured,
@@ -60,6 +74,12 @@ export const AuthPortal: React.FC = () => {
   useEffect(() => {
     void verifyFirestoreConnection().then(setFbStatus);
   }, []);
+
+  useEffect(() => {
+    if (redirectAuthError) {
+      setError(redirectAuthError);
+    }
+  }, [redirectAuthError]);
 
   // Handle Firebase Action Links (resetPassword or verifyEmail from URL query params)
   useEffect(() => {
@@ -88,24 +108,35 @@ export const AuthPortal: React.FC = () => {
   }, [actionLink, verifyResetCode, completeEmailVerificationCode, clearActionLink]);
 
   const switchTab = (nextTab: AuthTab) => {
+    if (submitting) return;
     setTab(nextTab);
     setError(null);
     setNotice(null);
+    clearRedirectAuthError();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setError(null);
     setNotice(null);
-    if (!email.trim() || !password) {
-      setError('Masukkan alamat email dan kata sandi.');
+    clearRedirectAuthError();
+
+    const emailCheck = validateEmailAddressFormat(email);
+    if (!emailCheck.valid) {
+      setError(emailCheck.error || 'Format alamat email tidak valid.');
       return;
     }
+    if (!password) {
+      setError('Masukkan kata sandi akun Anda.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       await loginWithEmail(email, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal masuk.');
+      setError(err instanceof Error ? err.message : 'Gagal masuk ke ruang kerja.');
     } finally {
       setSubmitting(false);
     }
@@ -113,16 +144,31 @@ export const AuthPortal: React.FC = () => {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setError(null);
     setNotice(null);
-    if (!displayName.trim() || !email.trim() || !password) {
-      setError('Lengkapi nama lengkap, email, dan kata sandi.');
+    clearRedirectAuthError();
+
+    const profileCheck = validateProfileInput({displayName});
+    if (!profileCheck.valid) {
+      setError(profileCheck.error || 'Nama lengkap wajib diisi (2–120 karakter).');
+      return;
+    }
+    const emailCheck = validateEmailAddressFormat(email);
+    if (!emailCheck.valid) {
+      setError(emailCheck.error || 'Format alamat email tidak valid.');
+      return;
+    }
+    const passCheck = validatePasswordStrength(password);
+    if (!passCheck.valid) {
+      setError(passCheck.error || 'Kata sandi belum memenuhi standar keamanan.');
       return;
     }
     if (password !== confirmPassword) {
       setError('Konfirmasi kata sandi tidak cocok.');
       return;
     }
+
     setSubmitting(true);
     try {
       await registerWithEmail(email, password, displayName);
@@ -136,12 +182,17 @@ export const AuthPortal: React.FC = () => {
 
   const handleForgot = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setError(null);
     setNotice(null);
-    if (!email.trim()) {
-      setError('Masukkan alamat email akun Anda.');
+    clearRedirectAuthError();
+
+    const emailCheck = validateEmailAddressFormat(email);
+    if (!emailCheck.valid) {
+      setError(emailCheck.error || 'Masukkan alamat email yang valid.');
       return;
     }
+
     setSubmitting(true);
     try {
       await requestPasswordReset(email);
@@ -157,13 +208,20 @@ export const AuthPortal: React.FC = () => {
 
   const handleConfirmReset = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!actionLink.oobCode) return;
+    if (submitting || !actionLink.oobCode) return;
     setError(null);
     setNotice(null);
+
+    const passCheck = validatePasswordStrength(password);
+    if (!passCheck.valid) {
+      setError(passCheck.error || 'Kata sandi baru belum memenuhi standar keamanan.');
+      return;
+    }
     if (password !== confirmPassword) {
       setError('Konfirmasi kata sandi baru tidak cocok.');
       return;
     }
+
     setSubmitting(true);
     try {
       await completePasswordReset(actionLink.oobCode, password);
@@ -180,12 +238,14 @@ export const AuthPortal: React.FC = () => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async (useRedirect = false) => {
+    if (submitting) return;
     setError(null);
     setNotice(null);
+    clearRedirectAuthError();
     setSubmitting(true);
     try {
-      await loginWithGoogle();
+      await loginWithGoogle({useRedirect});
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal masuk dengan Google.');
     } finally {
@@ -267,7 +327,7 @@ export const AuthPortal: React.FC = () => {
               </>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <button
               type="button"
               onClick={() => setShowInstallGuide(true)}
@@ -283,6 +343,14 @@ export const AuthPortal: React.FC = () => {
             >
               <HelpCircle className="h-3.5 w-3.5" />
               Petunjuk Konfigurasi
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDiagnosticModal(true)}
+              className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-blue-200 underline-offset-4 hover:text-white hover:underline"
+            >
+              <Activity className="h-3.5 w-3.5" />
+              Diagnostik Auth
             </button>
           </div>
         </div>
@@ -350,7 +418,7 @@ export const AuthPortal: React.FC = () => {
                 <strong className="text-slate-900 dark:text-slate-100">{resetEmailTarget}</strong>.
               </p>
 
-              <form onSubmit={(e) => void handleConfirmReset(e)} className="mt-6 space-y-4">
+              <form onSubmit={(e) => void handleConfirmReset(e)} noValidate className="mt-6 space-y-4">
                 <div>
                   <label
                     htmlFor="reset-pass"
@@ -358,14 +426,25 @@ export const AuthPortal: React.FC = () => {
                   >
                     Kata Sandi Baru
                   </label>
-                  <input
-                    id="reset-pass"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Minimal 8 karakter, huruf besar, kecil & angka"
-                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-600/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  />
+                  <div className="relative mt-1.5">
+                    <input
+                      id="reset-pass"
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Minimal 8 karakter, huruf besar, kecil & angka"
+                      autoComplete="new-password"
+                      className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-3.5 pr-10 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-600/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label
@@ -376,16 +455,20 @@ export const AuthPortal: React.FC = () => {
                   </label>
                   <input
                     id="reset-pass-confirm"
-                    type="password"
+                    type={showPassword ? 'text' : 'password'}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Ulangi kata sandi baru"
+                    autoComplete="new-password"
                     className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-600/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                   />
                 </div>
 
                 {error && (
-                  <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/50 dark:text-rose-200">
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700 dark:border-rose-900/70 dark:bg-rose-950/50 dark:text-rose-200"
+                  >
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{error}</span>
                   </div>
@@ -394,6 +477,7 @@ export const AuthPortal: React.FC = () => {
                 <div className="flex items-center gap-3 pt-1">
                   <button
                     type="button"
+                    disabled={submitting}
                     onClick={() => {
                       clearActionLink();
                       setResetEmailTarget(null);
@@ -405,8 +489,9 @@ export const AuthPortal: React.FC = () => {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="flex-1 rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
+                    className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
                   >
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting ? 'Menyimpan...' : 'Simpan Kata Sandi'}
                   </button>
                 </div>
@@ -480,10 +565,35 @@ export const AuthPortal: React.FC = () => {
               {error && (
                 <div
                   role="alert"
-                  className="mt-5 flex items-start gap-2.5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs leading-relaxed text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/50 dark:text-rose-200"
+                  className="mt-5 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs leading-relaxed text-rose-800 dark:border-rose-900/70 dark:bg-rose-950/50 dark:text-rose-200"
                 >
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
-                  <span>{error}</span>
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <span className="flex-1">{error}</span>
+                  </div>
+                  {(lastAuthDiagnostic?.isDomainError || lastAuthDiagnostic?.isPopupBlocked) && (
+                    <div className="mt-2.5 flex flex-wrap items-center gap-2 pl-6">
+                      {lastAuthDiagnostic?.isPopupBlocked && (
+                        <button
+                          type="button"
+                          disabled={submitting}
+                          onClick={() => void handleGoogleSignIn(true)}
+                          className="rounded-md bg-[#0F1E36] px-2.5 py-1 text-[11px] font-medium text-white hover:bg-[#162A4A] dark:bg-violet-700 dark:hover:bg-violet-600"
+                        >
+                          Gunakan Mode Redirect Google
+                        </button>
+                      )}
+                      {lastAuthDiagnostic?.isDomainError && (
+                        <button
+                          type="button"
+                          onClick={() => setShowDiagnosticModal(true)}
+                          className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-800 hover:bg-rose-100 dark:border-rose-700 dark:bg-slate-900 dark:text-rose-200"
+                        >
+                          Buka Diagnostik Admin
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -498,7 +608,7 @@ export const AuthPortal: React.FC = () => {
               )}
 
               {tab === 'login' && (
-                <form onSubmit={(e) => void handleLogin(e)} className="mt-5 space-y-4">
+                <form onSubmit={(e) => void handleLogin(e)} noValidate className="mt-5 space-y-4">
                   <div>
                     <label
                       htmlFor="login-email"
@@ -552,15 +662,20 @@ export const AuthPortal: React.FC = () => {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
                   >
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting ? 'Memproses...' : 'Masuk dengan Email'}
                   </button>
                 </form>
               )}
 
               {tab === 'register' && (
-                <form onSubmit={(e) => void handleRegister(e)} className="mt-5 space-y-4">
+                <form
+                  onSubmit={(e) => void handleRegister(e)}
+                  noValidate
+                  className="mt-5 space-y-4"
+                >
                   <div>
                     <label
                       htmlFor="reg-name"
@@ -610,15 +725,25 @@ export const AuthPortal: React.FC = () => {
                     >
                       Kata Sandi
                     </label>
-                    <input
-                      id="reg-password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="Min. 8 karakter (huruf besar, kecil, angka)"
-                      autoComplete="new-password"
-                      className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-600/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                    />
+                    <div className="relative mt-1.5">
+                      <input
+                        id="reg-password"
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Min. 8 karakter (huruf besar, kecil, angka)"
+                        autoComplete="new-password"
+                        className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-3.5 pr-10 text-sm text-slate-900 focus:border-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-600/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
 
                   <div>
@@ -630,7 +755,7 @@ export const AuthPortal: React.FC = () => {
                     </label>
                     <input
                       id="reg-confirm"
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       placeholder="Ulangi kata sandi"
@@ -642,15 +767,16 @@ export const AuthPortal: React.FC = () => {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
                   >
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting ? 'Mendaftarkan...' : 'Daftar & Kirim Verifikasi Email'}
                   </button>
                 </form>
               )}
 
               {tab === 'forgot' && (
-                <form onSubmit={(e) => void handleForgot(e)} className="mt-5 space-y-4">
+                <form onSubmit={(e) => void handleForgot(e)} noValidate className="mt-5 space-y-4">
                   <div>
                     <label
                       htmlFor="forgot-email"
@@ -675,8 +801,9 @@ export const AuthPortal: React.FC = () => {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="w-full rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#0F1E36] px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#162A4A] disabled:opacity-60 dark:bg-violet-700 dark:hover:bg-violet-600"
                   >
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
                     {submitting ? 'Mengirim Tautan...' : 'Kirim Tautan Reset Kata Sandi'}
                   </button>
                 </form>
@@ -692,28 +819,32 @@ export const AuthPortal: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => void handleGoogleSignIn()}
+                    onClick={() => void handleGoogleSignIn(false)}
                     disabled={submitting}
                     className="mt-2 flex w-full items-center justify-center gap-2.5 rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:hover:bg-slate-700"
                   >
-                    <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        fill="#4285F4"
-                        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                      />
-                      <path
-                        fill="#34A853"
-                        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-                      />
-                      <path
-                        fill="#FBBC05"
-                        d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-                      />
-                      <path
-                        fill="#EA4335"
-                        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-                      />
-                    </svg>
+                    {submitting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          fill="#4285F4"
+                          d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
+                        />
+                      </svg>
+                    )}
                     Lanjutkan dengan Google Sign-In
                   </button>
                 </div>
@@ -763,6 +894,12 @@ export const AuthPortal: React.FC = () => {
                   </span>
                 </div>
                 <div className="flex justify-between gap-4 py-1">
+                  <span className="text-slate-500 dark:text-slate-400">Auth Domain</span>
+                  <span className="text-slate-900 dark:text-slate-100">
+                    {fbStatus.authDomain || 'Belum diatur'}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4 py-1">
                   <span className="text-slate-500 dark:text-slate-400">Database ID</span>
                   <span className="text-slate-900 dark:text-slate-100">
                     {fbStatus.databaseId || '(default)'}
@@ -778,7 +915,7 @@ export const AuthPortal: React.FC = () => {
 
               <div className="space-y-2 leading-relaxed">
                 <p className="font-medium text-slate-900 dark:text-slate-100">
-                  Langkah Mengaktifkan Email/Password &amp; MFA:
+                  Langkah Mengaktifkan Domain Hosting, Email/Password &amp; MFA:
                 </p>
                 <ol className="list-decimal space-y-1.5 pl-4">
                   <li>
@@ -789,6 +926,10 @@ export const AuthPortal: React.FC = () => {
                     .
                   </li>
                   <li>
+                    Masuk ke <strong>Authentication &gt; Settings &gt; Authorized domains</strong>{' '}
+                    dan tambahkan domain Vercel/produksi Anda secara spesifik.
+                  </li>
+                  <li>
                     Masuk ke <strong>Authentication &gt; Sign-in method</strong> lalu aktifkan{' '}
                     <strong>Email/Password</strong> dan pastikan <strong>Google</strong> aktif.
                   </li>
@@ -797,13 +938,24 @@ export const AuthPortal: React.FC = () => {
                     <strong>Multi-factor authentication</strong> pada tab Authentication Settings.
                   </li>
                   <li>
-                    Jangan pernah menyimpan Service Account JSON atau private key di aplikasi frontend.
+                    Jangan pernah menyimpan Service Account JSON atau private key di aplikasi
+                    frontend.
                   </li>
                 </ol>
               </div>
             </div>
 
-            <div className="mt-5 flex justify-end">
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSetupGuide(false);
+                  setShowDiagnosticModal(true);
+                }}
+                className="rounded-lg border border-slate-200 px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Buka Diagnostik Auth
+              </button>
               <button
                 type="button"
                 onClick={() => setShowSetupGuide(false)}
@@ -815,6 +967,12 @@ export const AuthPortal: React.FC = () => {
           </div>
         </div>
       )}
+
+      <AuthDiagnosticModal
+        open={showDiagnosticModal}
+        fbStatus={fbStatus}
+        onClose={() => setShowDiagnosticModal(false)}
+      />
       <InstallHigayonModal open={showInstallGuide} onClose={() => setShowInstallGuide(false)} />
     </div>
   );
